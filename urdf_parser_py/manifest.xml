@@ -17,4 +17,5 @@
   </export>
 
   <depend package="rospy"/>
+  <depend package="tf" /> 
 </package>
