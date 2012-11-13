@@ -1,8 +1,8 @@
 import roslib; roslib.load_manifest('urdf_parser_py')
 import rospy
-
 import sys
-
+from tf.transformations import euler_matrix
+#import euler_from_quaternion
 from urdf_parser_py.urdf import URDF
 
 
@@ -139,28 +139,106 @@ class GenerateMetapodFromURDF:
         self.close_header(f,header_suffix)
         f.close()
 
-    def generate_init_joint(self,f,joint):
-        s_width='    ';
-        s=s_width+ '// Init'+joint.name
-        f.write(s)
-        
+    def generate_init_joint(self,f,joint,label):
+        s_width='  ';
+        okToWrite = False;
+
         # Initialize joint
         if joint.joint_type == 'floating':
           s=s_width+'INITIALIZE_JOINT_FREE_FLYER(' +joint.name + ');\n'
+          okToWrite = True;
+
         if joint.joint_type == 'revolute':
           laxis = joint.axis.split(' ')
-          s=s_width+'INITIALIZE_JOINT_REVOLUTE_AXIS_ANY(' +joint.name 
+          s=s_width+'INITIALIZE_JOINT_REVOLUTE_AXIS_ANY(' +joint.name +','
           s=s+ laxis[0] + ',' + laxis[1] + ',' + laxis[2] + ');\n'                    
+          okToWrite = True;
+        
+        if not okToWrite:
+          return label
+        
+        s2=s_width+ '// Initialization of '+joint.name +'\n'
+        f.write(s2)        
         f.write(s)
-
+        
         # Initialize name
-        s = 'const std::string ' + joint.name + '::name = "' + joint.name '";\n'
+        s=s_width + 'const std::string ' + joint.name + '::name = "' + joint.name + '";\n'
+        f.write(s)
+        
+        # Write label
+        s=s_width + 'const int ' + joint.name + '::label = ' + str(label) + ';\n'
         f.write(s)
 
+        # Position in configuration
+        s=s_width + 'const int ' + joint.name + '::positionInConf = ' + str(label-1) + ';\n'
+        f.write(s)
         
-    def generate_init_body(self,f,body):
+        # Transform of the joint
+        s=s_width + 'const Spatial::Transform ' + joint.name + '::Xt = Spatial::Transform(\n'
+        f.write(s)
+        alpha = joint.origin.rotation[0]
+        beta = joint.origin.rotation[1]
+        gamma = joint.origin.rotation[2]
+        Re = euler_matrix(alpha, beta, gamma, 'rxyz')
+        s=s_width + '  matrix3dMaker('
+        s=s+  str(Re[0][0]) + ',' + str(Re[0][1]) + ',' + str(Re[0][2]) + ',\n'
+        f.write(s)
+        s=s_width + '   ' + str(Re[1][0]) + ',' + str(Re[1][1]) + ',' + str(Re[1][2]) + ',\n'
+        f.write(s)
+        s=s_width + '   ' + str(Re[2][0]) + ',' + str(Re[2][1]) + ',' + str(Re[2][2]) + '),\n'
+        f.write(s)
+        s=s_width + '  vector3d('+ str(joint.origin.position[0])+','\
+          + str(joint.origin.position[1])+','\
+          + str(joint.origin.position[2])+'));\n'
+        f.write(s)
+        return label+1
+        
+    def generate_init_body(self,f,body,label):
+        if body.inertial == None:
+          return label
 
+        # initialize link
+        s_width='  '
+        s=s_width + 'INITIALIZE_BODY(' + body.name + ');\n'
+        f.write(s)                
+        s=s_width + '// Initialization of '+body.name + '\n'
+        f.write(s)
         
+        # Set name
+        s=s_width + 'const std::string ' + body.name + '::name = "' + body.name + '";\n'
+        f.write(s)
+        s=s_width + 'const int ' + body.name + '::label = ' + str(label) + ';\n'
+        f.write(s)
+        s=s_width + 'const FloatType ' + body.name + '::mass = ' + str(body.inertial.mass) + ';\n'
+        f.write(s)
+        
+        s=s_width + 'const vector3d ' + body.name + '::CoM = vector3d('
+        s=s+ str(body.inertial.origin.position[0]) + ',' +\
+             str(body.inertial.origin.position[1]) + ',' +\
+             str(body.inertial.origin.position[2]) + ');\n'
+
+        f.write(s)
+        
+        s=s_width + 'const matrix3d '+ body.name + '::inertie = matrix3dMaker(\n'
+        s=s+s_width + '  ' +str(body.inertial.matrix['ixx']) + ',' +\
+                            str(body.inertial.matrix['ixy']) + ',' +\
+                            str(body.inertial.matrix['ixz']) + ',\n'
+
+        s=s+s_width + '  ' +str(body.inertial.matrix['ixy']) + ',' +\
+                            str(body.inertial.matrix['iyy']) + ',' +\
+                            str(body.inertial.matrix['iyz']) + ',\n'
+
+        s=s+s_width + '  ' +str(body.inertial.matrix['ixz']) + ',' +\
+                            str(body.inertial.matrix['iyz']) + ',' +\
+                            str(body.inertial.matrix['izz']) + ');\n'
+        f.write(s)
+        
+        s=  s_width + 'Spatial::Inertia ' + body.name + '::I = spatialInertiaMaker(' + body.name + '::mass,\n'
+        s=s+s_width + '                 ' +             '                          ' + body.name + '::CoM,\n'
+        s=s+s_width + '                 ' +             '                          ' + body.name + '::inertie);\n'
+        f.write(s)
+        return label+1
+
     def generate_init(self):
         # Open file
         lfilename = self.urdf.name + '.cc'
@@ -174,17 +252,25 @@ class GenerateMetapodFromURDF:
         s = ' */'
         f.write(s)
         # Open namespaces.
-        open_metapod_ns(self,f);
+        self.open_metapod_ns(f);
 
-        s = '// Initialization of the robot global constants'
+        s = '  // Initialization of the robot global constants\n'
         f.write(s)
-        s = 'Eigen::Matrix< FloatType, Robot::NBDOF, Robot::NBDOF > Robot::H;'      
+        s = '  Eigen::Matrix< FloatType, Robot::NBDOF, Robot::NBDOF > Robot::H;\n\n'      
         f.write(s)
 
-        
+        # For each joint
+        i=0
+        for k,v in self.urdf.joints.iteritems():
+          i=self.generate_init_joint(f,v,i)
+
+        # For each body
+        i=0
+        for k,v in self.urdf.links.iteritems():
+          i=self.generate_init_body(f,v,i)
 
         # Close namespaces.
-        close_metapod_ns(self,f);
+        self.close_metapod_ns(f);
 
         f.close()
 
