@@ -40,14 +40,29 @@ class GenerateMetapodFromURDF:
     # Bodies related method
     def generate_body(self,f,body,joint,body_parent=None):
         s='    CREATE_BODY(' + ' ' + body
-        if body_parent is None:
-            s= s + ', 0, NP, ' 
-            s= s + joint.name + ');\n'
-        else:
+        if self.urdf.joints[joint].joint_type != 'fixed':
+          if body_parent is None:
+            s= s + ', 0, NP, base_joint );\n'
+          else:
             s= s + ', 1,' + body_parent 
             s= s + ', ' + joint + ');\n'
-        f.write(s)
-
+          f.write(s)
+        else:
+          if body_parent=='base_link':
+            s= s + ', 0 , NP, ' + joint + ' );\n'  
+            f.write(s)
+        
+        if body in self.urdf.child_map:
+          for v in self.urdf.child_map[body]:
+            joint = v[0]
+            lchild = v[1]
+            if self.urdf.joints[joint].joint_type=='fixed':
+              if body_parent is not None:
+                  body=body_parent
+              else:
+                  body='base_link'
+            self.generate_body(f, lchild, joint, body)
+            
     def generate_bodies(self):
         lfilename = self.urdf.name + '_body.hh'
         f = open(lfilename,'w')
@@ -62,11 +77,9 @@ class GenerateMetapodFromURDF:
 
         for k, v in self.urdf.links.iteritems():
             if k not in self.urdf.parent_map:
-              self.generate_body(f, k, v)
-            else:
-              (joint,parent) = self.urdf.parent_map[k]
-              if self.urdf.joints[joint].joint_type != 'fixed':
-                  self.generate_body(f, k, joint, parent)
+              v = self.urdf.child_map[k]
+              joint = v[0][0]
+              self.generate_body(f, k, joint)
 
         self.close_robot_ns(f)
         self.close_metapod_ns(f)
@@ -78,7 +91,12 @@ class GenerateMetapodFromURDF:
     def generate_joint(self,f,joint):
         towrite=False
         s = '      ';
-        if joint.joint_type == 'floating':
+        # Detect root
+        rootparent=False
+        if joint.parent not in self.urdf.parent_map:
+          rootparent=True
+
+        if (joint.joint_type == 'floating') | rootparent:
           s=s+'JOINT_FREE_FLYER(' +joint.name + ');'
           towrite=True
         if joint.joint_type == 'revolute':
@@ -114,6 +132,19 @@ class GenerateMetapodFromURDF:
         self.close_header(f,header_suffix)
         f.close()
 
+    def generate_template_rnea_crba_robot(self,f,lextern=False):
+        s_prefix=''
+        if lextern:
+            s_prefix='extern';
+        s=s_prefix + ' template struct metapod::crba<metapod::'+ self.urdf.name + '::Robot,true>;\n'
+        f.write(s)
+        s=s_prefix + ' template struct metapod::rnea<metapod::'+ self.urdf.name + '::Robot,true>;\n'
+        f.write(s)      
+        s=s_prefix + ' template struct metapod::crba<metapod::'+ self.urdf.name + '::Robot,false>;\n'
+        f.write(s)      
+        s=s_prefix + ' template struct metapod::rnea<metapod::'+ self.urdf.name + '::Robot,false>;\n\n'
+        f.write(s)
+
     def generate_template_robot(self):
         lfilename = self.urdf.name + '.hh'
         f = open(lfilename,'w')
@@ -125,16 +156,9 @@ class GenerateMetapodFromURDF:
         f.write(s)
         s='#include "metapod/algos/crba.hh"\n\n'
         f.write(s)
-        s ='#include "robot.hh"\n\n'
-        
-        s='extern template struct metapod::crba<metapod::'+ self.urdf.name + ',true>;\n'
+        s ='#include "' + self.urdf.name + '_robot.hh"\n\n'
         f.write(s)
-        s='extern template struct metapod::rnea<metapod::'+ self.urdf.name + ',true>;\n'
-        f.write(s)      
-        s='extern template struct metapod::crba<metapod::'+ self.urdf.name + ',false>;\n'
-        f.write(s)      
-        s='extern template struct metapod::rnea<metapod::'+ self.urdf.name + ',false>;\n\n'
-        f.write(s)
+        self.generate_template_rnea_crba_robot(f,True)
 
         self.close_header(f,header_suffix)
         f.close()
@@ -251,8 +275,15 @@ class GenerateMetapodFromURDF:
         f.write(s)
         s = ' */'
         f.write(s)
+
+        s = '# include "' + self.urdf.name + '.hh"\n'
+        f.write(s)
+        
+        self.generate_template_rnea_crba_robot(f,False)
+        
         # Open namespaces.
         self.open_metapod_ns(f);
+        self.open_robot_ns(f,self.urdf.name)
 
         s = '  // Initialization of the robot global constants\n'
         f.write(s)
@@ -270,40 +301,89 @@ class GenerateMetapodFromURDF:
           i=self.generate_init_body(f,v,i)
 
         # Close namespaces.
+        self.close_robot_ns(f)
         self.close_metapod_ns(f);
 
         f.close()
 
-    def generate_node(self,f,body,s_switch, lbool):
+    def generate_node(self,f,body,s_switch, lbool, child_left):
+
+        child_size = 0
+        # Number of child for the current body
+        if body in self.urdf.child_map:
+            child_size = len(self.urdf.child_map[body])
+
+        # Get the joint and the father link of current body
+        if body in self.urdf.parent_map:
+            (joint,parent) = self.urdf.parent_map[body]
+
+        # If the body is to be written
         if lbool:
-            s= body + ',\n'
+            s= body
+            # Add a comma if there was a parent
+            if body in self.urdf.parent_map:
+                s+=','
+            s+='\n'
             f.write(s)
 
-            # Deal with the joint of the current link/body
+            # Add the name joint of the current link/body it is not the root.
             if body in self.urdf.parent_map:
-                (joint,parent) = self.urdf.parent_map[body]
                 if joint:
-                    s= s_switch + joint + ',\n'
+                    s= s_switch + joint 
+            # If it is not then add base_joint
             else:
                 s_switch = s_switch + '             ' 
-                s= s_switch + 'base_joint,\n'
+                s= s_switch + 'base_joint'
             f.write(s)  
                        
         # Deal with the child of the current link
         if body in self.urdf.child_map:
-            for v in self.urdf.child_map[body]:
+            # We will count the number of Node to be written or not
+            generateNodeFalseNb=0
+            generateNodeTrueNb=0
+
+            # Going through all the childs
+            child_size = len(self.urdf.child_map[body])
+            for idx, v in enumerate(self.urdf.child_map[body]):
+                child_left = child_size -idx-1
                 ljoint = self.urdf.joints[v[0]]
+
+                generateNode=False
+                # If the joint is fixed then DO NOT write the body
                 if ljoint.joint_type !='fixed':
+                    generateNode=True
+                else:
+                  if body not in self.urdf.parent_map:
+                      generateNode=True
+                
+                if generateNode:        
+
+                    s=''
+                    # Add a comma if this is not the root
+                    if body in self.urdf.parent_map:    
+                        s= ','
+                    # Break the line in any case
+                    s+='\n'
+                    f.write(s)
+                    
+                    # Add a node corresponding to the child
+                    generateNodeTrueNb+=1
                     s= s_switch+'Node<'
                     f.write(s);
                     pres_switch=s_switch;
                     s_switch= s_switch+'     '
-                    self.generate_node(f,v[1],s_switch, True)
-                    s = pres_switch + '>,\n'
+                    self.generate_node(f,v[1],s_switch, True,child_left)
+                    s = pres_switch + '>'
+                    s+='\n'
                     s_switch=pres_switch
                     f.write(s)
                 else:
-                    self.generate_node(f,v[1],s_switch, False)     
+                    # Do n
+                    if generateNodeFalseNb==0:
+                        s= '\n'     
+                        f.write(s)
+                    self.generate_node(f,v[1],s_switch, False,child_left)     
+                    generateNodeFalseNb+=1
         
     def generate_robot(self):
         lfilename = self.urdf.name + '_robot.hh'
@@ -326,37 +406,65 @@ class GenerateMetapodFromURDF:
         f.write(s)
         
         # Class
-        s=s_width + 'class METAPOD_DLLEXPORT ' + self.urdf.name + '\n'
+        s=s_width + 'class METAPOD_DLLEXPORT Robot\n'
         s=s+s_width + '{\n' 
         f.write(s)
-        s=s_width + '  public:'
+        s=s_width + '  public:\n'
         f.write(s)
 
         s_width = s_width+'  '
-        s=s_width + '// Global constants or variable of the robot'
+        s=s_width + '// Global constants or variable of the robot\n'
         f.write(s)
         s=s_width + 'enum { NBDOF = ' + str(self.nb_dof) + '};\n'
         f.write(s)
         s=s_width + 'static Eigen::Matrix< FloatType, NBDOF, NBDOF> H;\n'
         f.write(s)
-        s=s_width + 'static Eigen::Matrix< FloatType, NBDOF, 1> confVector;\n\n'
+        s=s_width + 'typedef Eigen::Matrix< FloatType, NBDOF, 1> confVector;\n\n'
         f.write(s)
         
         # Generate nodes
-        s=s_width + 'typedef Node<'
+        s=s_width + 'typedef '
         f.write(s)
         s=s_width + '             '
         for link in self.urdf.links:
             if link not in self.urdf.parent_map:
-              self.generate_node(f, link, s_width, True)
+              self.generate_node(f, link, s_width, False,1)
 
-        s=s_width + '>'      
+        s=s_width + ' Tree;\n'      
+        s+='    };\n'
+        f.write(s)
         self.close_robot_ns(f)
         self.close_metapod_ns(f)
 
         self.close_header(f,header_suffix)
         f.close()
         
+    def generate_test_program(self):
+        lfilename = 'test_'+ self.urdf.name + '.cc'
+        f = open(lfilename,'w') 
+        s=['// Common includes\n# include <string>\n# include <iostream>\n# include <fstream>\n\n',
+           '// metapod includes\n# include "' + self.urdf.name +'_robot.hh"\n',
+           '# include "' + self.urdf.name + '.hh"\n',
+           '# include "metapod/tools/print.hh"\n# include "metapod/tools/initconf.hh"\n\n',
+           'using namespace metapod;\nusing namespace ' + self.urdf.name + ';\n',
+           'int main(void)\n{\n',
+           '  // Set configuration vectors (q, dq, ddq) to reference values.\n',
+           '  Robot::confVector q, dq, ddq;\n',
+           '  for(int i=0;i< Robot::NBDOF;i++)\n  {\n',
+           '    q(i) = dq(i) = ddq(i) = 0.0;\n',
+           '  }\n\n',
+           '  // Apply the RNEA to the metapod multibody and print the result in a log file.\n',
+           '  rnea< Robot, true >::run(q, dq, ddq);\n',
+           '  const char result_file[] = "rnea.log";\n',
+           '  std::ofstream log(result_file, std::ofstream::out);\n',
+           '  printTorques< Robot::Tree>(log);\n',
+           '  log.close();\n',
+           '}\n']
+
+        for k in s:
+            f.write(k)
+
+        f.close()
 
     def generate_metapod(self):
         self.generate_bodies()
@@ -364,3 +472,4 @@ class GenerateMetapodFromURDF:
         self.generate_robot()
         self.generate_template_robot()
         self.generate_init()
+        self.generate_test_program()
