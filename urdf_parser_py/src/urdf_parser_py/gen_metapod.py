@@ -168,9 +168,15 @@ class GenerateMetapodFromURDF:
         okToWrite = False;
 
         # Initialize joint
+        # print(joint.name + ' : ' +joint.joint_type)
         if joint.joint_type == 'floating':
           s=s_width+'INITIALIZE_JOINT_FREE_FLYER(' +joint.name + ');\n'
           okToWrite = True;
+
+        if joint.joint_type == 'fixed':
+          if joint.parent == 'base_link':
+            s=s_width+'INITIALIZE_JOINT_FREE_FLYER(' +joint.name + ');\n'
+            okToWrite = True;
 
         if joint.joint_type == 'revolute':
           laxis = joint.axis.split(' ')
