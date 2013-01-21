@@ -28,6 +28,10 @@ class GenerateMetapodFromURDF:
     def open_robot_ns(self,f,robot_name):
         s='  namespace ' + self.urdf.name + '\n' + '  {\n'
         f.write(s)
+
+    def use_robot_ns(self,f,robot_name):
+        s='  using namespace ' + self.urdf.name + ';\n'
+        f.write(s)
         
     def close_robot_ns(self,f):
         s='  } // end of namespace '+ self.urdf.name + '\n'
@@ -204,7 +208,7 @@ class GenerateMetapodFromURDF:
         f.write(s)
         s=s_width + '   ' + str(Re[2][0]) + ',' + str(Re[2][1]) + ',' + str(Re[2][2]) + '),\n'
         f.write(s)
-        s=s_width + '  vector3d('+ str(joint.origin.position[0])+','\
+        s=s_width + '  Vector3d('+ str(joint.origin.position[0])+','\
           + str(joint.origin.position[1])+','\
           + str(joint.origin.position[2])+'));\n'
         f.write(s)
@@ -212,7 +216,7 @@ class GenerateMetapodFromURDF:
     def generate_init_joint_rotation_identity(self, f, joint,s_width):
         s=s_width + 'j' + joint.name + '.Xt = Spatial::TransformT<Spatial::RotationMatrixIdentity>(\n'
         f.write(s)
-        s=s_width + '  (Spatial::RotationMatrixIdentity(),Vector3d('+ str(joint.origin.position[0])+','\
+        s=s_width + '  Spatial::RotationMatrixIdentity(),Vector3d('+ str(joint.origin.position[0])+','\
           + str(joint.origin.position[1])+','\
           + str(joint.origin.position[2])+'));\n'
         f.write(s)
@@ -288,7 +292,7 @@ class GenerateMetapodFromURDF:
         s=s_width + 'b' + body.name + '.mass = ' + str(body.inertial.mass) + ';\n'
         f.write(s)
         
-        s=s_width + 'b' + body.name + '.CoM = vector3d('
+        s=s_width + 'b' + body.name + '.CoM = Vector3d('
         s=s+ str(body.inertial.origin.position[0]) + ',' +\
              str(body.inertial.origin.position[1]) + ',' +\
              str(body.inertial.origin.position[2]) + ');\n'
@@ -309,9 +313,9 @@ class GenerateMetapodFromURDF:
                             str(body.inertial.matrix['izz']) + ');\n'
         f.write(s)
         
-        s=  s_width + 'b' + body.name + '.I = spatialInertiaMaker(' + body.name + '::mass,\n'
-        s=s+s_width + '                 ' +             '                          ' + body.name + '::CoM,\n'
-        s=s+s_width + '                 ' +             '                          ' + body.name + '::inertie);\n'
+        s=  s_width + 'b' + body.name + '.I = spatialInertiaMaker(b' + body.name + '.mass,\n'
+        s=s+s_width + '                 ' +             '                          b' + body.name + '.CoM,\n'
+        s=s+s_width + '                 ' +             '                          b' + body.name + '.inertie);\n'
         f.write(s)
         return label+1
 
@@ -325,31 +329,35 @@ class GenerateMetapodFromURDF:
         f.write(s)
         s = ' * It contains the initialization of all the robot bodies and joints.\n'
         f.write(s)
-        s = ' */'
+        s = ' */\n'
         f.write(s)
 
-        s = '# include "' + self.urdf.name + '.hh"\n'
+        s = '# include "metapod/tools/robot-base.hh"\n'
+        f.write(s)
+        s = '# include "metapod/models/' + self.urdf.name + '/'  + self.urdf.name + '.hh"\n'
         f.write(s)
         
-        self.generate_template_rnea_crba_robot(f,False)
         
         # Open namespaces.
         self.open_metapod_ns(f);
-        self.open_robot_ns(f,self.urdf.name)
+        self.use_robot_ns(f,self.urdf.name)
 
-        s = '  // Initialization of the robot global constants\n'
+        s = '  template <> METAPOD_' + self.urdf.name.upper() + \
+            '_DLLAPI\n'
         f.write(s)
-        s = '  Eigen::Matrix< FloatType, Robot::NBDOF, Robot::NBDOF > Robot::H;\n\n'      
+        s = '  void RobotInstanceBase<Robot>::InitializeRobot()\n'
         f.write(s)
-
+        s = '  {\n'
+        f.write(s)
         # Generate node.
-        s_width = '    ';
+        s_width = '      ';
         for link in self.urdf.links:
             if link not in self.urdf.parent_map:
               self.generate_init_node(f, link, s_width, False,1,0)
+        s = '  }\n'
+        f.write(s)
 
         # Close namespaces.
-        self.close_robot_ns(f)
         self.close_metapod_ns(f);
 
         f.close()
@@ -382,8 +390,8 @@ class GenerateMetapodFromURDF:
             s= s_switch + joint_name + 'T::Body &b' + body + ' = ' + joint_name + '.m_Body;';
             s+='\n\n'
             f.write(s)
-            self.generate_init_joint(f,self.urdf.joints[joint_name],label,'    ');
-            self.generate_init_body(f,self.urdf.links[body],label,'    ');
+            self.generate_init_joint(f,self.urdf.joints[joint_name],label,s_switch);
+            self.generate_init_body(f,self.urdf.links[body],label,s_switch);
             label=label+1
             
                        
