@@ -37,9 +37,15 @@ class GenerateMetapodFromURDF:
         s='#endif /* ' + suffix + '_HH */'
         f.write(s)
 
+    def get_urdf_joint_root(self):
+       for k,joint in self.urdf.joints.iteritems():
+         if joint.parent not in self.urdf.parent_map:             
+             return joint
+       return
+
     # Bodies related method
     def generate_body(self,f,body,joint,body_parent=None):
-        s='    CREATE_BODY(' + ' ' + body
+        s='    CREATE_BODY(METAPOD_' + self.urdf.name.upper() + ', ' + body
         if self.urdf.joints[joint].joint_type != 'fixed':
           if body_parent is None:
             s= s + ', 0, NP, base_joint );\n'
@@ -87,6 +93,31 @@ class GenerateMetapodFromURDF:
         self.close_header(f,header_suffix)
         f.close()
 
+    def generate_revolute_joint(self,f,joint, s_width):
+      lsaxis = joint.axis.split(' ')
+      s=s_width;
+      laxis = [ float(lsaxis[0]), float(lsaxis[1]), float(lsaxis[2])]
+      print laxis
+      # Find out the type of joint.     
+      if laxis[0]==1.0 and laxis[1]==0.0 and laxis[2]==0.0:
+          s=s+'JOINT_REVOLUTE_AXIS_X( METAPOD_' + self.urdf.name.upper() + ',' + joint.name + ');'
+          joint.subtype = 'revolute_around_x'
+      elif laxis[0]==0.0 and laxis[1]==1.0 and laxis[2]==0.0:
+          s=s+'JOINT_REVOLUTE_AXIS_Y( METAPOD_' + self.urdf.name.upper() + ',' + joint.name + ');'
+          joint.subtype = 'revolute_around_y'
+      elif laxis[0]==0.0 and laxis[1]==0.0 and laxis[2]==1.0:
+          s=s+'JOINT_REVOLUTE_AXIS_Z( METAPOD_' + self.urdf.name.upper() + ',' + joint.name + ');'
+          joint.subtype = 'revolute_around_y'         
+      else:
+        s=s+'JOINT_REVOLUTE_AXIS_ANY(METAPOD_' + self.urdf.name.upper() + ',' + joint.name + ','\
+            + laxis[0] + ',' + laxis[1] + ','\
+            + laxis[2] + ');'
+        joint.subtype = 'revolute_axis_any'
+      s+='\n'
+      f.write(s)
+      self.nb_dof = self.nb_dof + 1
+      return
+
     # Bodies related method
     def generate_joint(self,f,joint):
         towrite=False
@@ -99,13 +130,9 @@ class GenerateMetapodFromURDF:
         if (joint.joint_type == 'floating') | rootparent:
           s=s+'JOINT_FREE_FLYER(' +joint.name + ');'
           towrite=True
+
         if joint.joint_type == 'revolute':
-          laxis = joint.axis.split(' ')
-          s=s+'JOINT_REVOLUTE_AXIS_ANY(' + joint.name + ','\
-              + laxis[0] + ',' + laxis[1] + ','\
-              + laxis[2] + ');'
-          towrite=True
-          self.nb_dof = self.nb_dof + 1
+          self.generate_revolute_joint(f,joint,s)
 
         s=s+'\n'
         if towrite:
@@ -162,11 +189,47 @@ class GenerateMetapodFromURDF:
 
         self.close_header(f,header_suffix)
         f.close()
+        
+    def generate_init_joint_rotation_general(self, f, joint,s_width):
+        alpha = joint.origin.rotation[0]
+        beta = joint.origin.rotation[1]
+        gamma = joint.origin.rotation[2]
+        Re = euler_matrix(alpha, beta, gamma, 'rxyz')
 
-    def generate_init_joint(self,f,joint,label):
-        s_width='  ';
+        s=s_width + 'j' + joint.name + '.Xt = Spatial::Transform(\n'
+        s=s_width + '  matrix3dMaker('
+        s=s+  str(Re[0][0]) + ',' + str(Re[0][1]) + ',' + str(Re[0][2]) + ',\n'
+        f.write(s)
+        s=s_width + '   ' + str(Re[1][0]) + ',' + str(Re[1][1]) + ',' + str(Re[1][2]) + ',\n'
+        f.write(s)
+        s=s_width + '   ' + str(Re[2][0]) + ',' + str(Re[2][1]) + ',' + str(Re[2][2]) + '),\n'
+        f.write(s)
+        s=s_width + '  vector3d('+ str(joint.origin.position[0])+','\
+          + str(joint.origin.position[1])+','\
+          + str(joint.origin.position[2])+'));\n'
+        f.write(s)
+
+    def generate_init_joint_rotation_identity(self, f, joint,s_width):
+        s=s_width + 'j' + joint.name + '.Xt = Spatial::TransformT<Spatial::RotationMatrixIdentity>(\n'
+        f.write(s)
+        s=s_width + '  (Spatial::RotationMatrixIdentity(),Vector3d('+ str(joint.origin.position[0])+','\
+          + str(joint.origin.position[1])+','\
+          + str(joint.origin.position[2])+'));\n'
+        f.write(s)
+
+    def generate_init_joint_dispatch(self,f,joint, s_width):
+        alpha = joint.origin.rotation[0]
+        beta = joint.origin.rotation[1]
+        gamma = joint.origin.rotation[2]
+        if alpha==0.0 and beta == 0.0 and gamma == 0.0:
+          self.generate_init_joint_rotation_identity(f,joint,s_width)
+        else:
+          self.generate_init_joint_rotation_general(f,joint,s_width)
+                                              
+    def generate_init_joint(self,f,joint,label,s_width='  '):
+        
         okToWrite = False;
-
+        
         # Initialize joint
         # print(joint.name + ' : ' +joint.joint_type)
         if joint.joint_type == 'floating':
@@ -186,70 +249,53 @@ class GenerateMetapodFromURDF:
         
         if not okToWrite:
           return label
-        
+
         s2=s_width+ '// Initialization of '+joint.name +'\n'
         f.write(s2)        
-        f.write(s)
+        #f.write(s)
         
         # Initialize name
-        s=s_width + 'const std::string ' + joint.name + '::name = "' + joint.name + '";\n'
+        s=s_width + 'j' + joint.name + '.name = "' + joint.name + '";\n'
         f.write(s)
         
         # Write label
-        s=s_width + 'const int ' + joint.name + '::label = ' + str(label) + ';\n'
+        s=s_width + 'j' + joint.name + '.label = ' + str(label) + ';\n'
         f.write(s)
 
         # Position in configuration
-        s=s_width + 'const int ' + joint.name + '::positionInConf = ' + str(label-1) + ';\n'
+        s=s_width + 'j' + joint.name + '.positionInConf = ' + str(label-1) + ';\n'
         f.write(s)
         
         # Transform of the joint
-        s=s_width + 'const Spatial::Transform ' + joint.name + '::Xt = Spatial::Transform(\n'
-        f.write(s)
-        alpha = joint.origin.rotation[0]
-        beta = joint.origin.rotation[1]
-        gamma = joint.origin.rotation[2]
-        Re = euler_matrix(alpha, beta, gamma, 'rxyz')
-        s=s_width + '  matrix3dMaker('
-        s=s+  str(Re[0][0]) + ',' + str(Re[0][1]) + ',' + str(Re[0][2]) + ',\n'
-        f.write(s)
-        s=s_width + '   ' + str(Re[1][0]) + ',' + str(Re[1][1]) + ',' + str(Re[1][2]) + ',\n'
-        f.write(s)
-        s=s_width + '   ' + str(Re[2][0]) + ',' + str(Re[2][1]) + ',' + str(Re[2][2]) + '),\n'
-        f.write(s)
-        s=s_width + '  vector3d('+ str(joint.origin.position[0])+','\
-          + str(joint.origin.position[1])+','\
-          + str(joint.origin.position[2])+'));\n'
-        f.write(s)
+        self.generate_init_joint_dispatch(f,joint,s_width)
         return label+1
         
-    def generate_init_body(self,f,body,label):
+    def generate_init_body(self,f,body,label,s_width='  '):
         if body.inertial == None:
           return label
 
         # initialize link
-        s_width='  '
         s=s_width + 'INITIALIZE_BODY(' + body.name + ');\n'
-        f.write(s)                
+        #f.write(s)                
         s=s_width + '// Initialization of '+body.name + '\n'
         f.write(s)
         
         # Set name
-        s=s_width + 'const std::string ' + body.name + '::name = "' + body.name + '";\n'
+        s=s_width + 'b' + body.name + '.name = "' + body.name + '";\n'
         f.write(s)
-        s=s_width + 'const int ' + body.name + '::label = ' + str(label) + ';\n'
+        s=s_width + 'b' + body.name + '.label = ' + str(label) + ';\n'
         f.write(s)
-        s=s_width + 'const FloatType ' + body.name + '::mass = ' + str(body.inertial.mass) + ';\n'
+        s=s_width + 'b' + body.name + '.mass = ' + str(body.inertial.mass) + ';\n'
         f.write(s)
         
-        s=s_width + 'const vector3d ' + body.name + '::CoM = vector3d('
+        s=s_width + 'b' + body.name + '.CoM = vector3d('
         s=s+ str(body.inertial.origin.position[0]) + ',' +\
              str(body.inertial.origin.position[1]) + ',' +\
              str(body.inertial.origin.position[2]) + ');\n'
 
         f.write(s)
         
-        s=s_width + 'const matrix3d '+ body.name + '::inertie = matrix3dMaker(\n'
+        s=s_width + 'b'+ body.name + '.inertie = matrix3dMaker(\n'
         s=s+s_width + '  ' +str(body.inertial.matrix['ixx']) + ',' +\
                             str(body.inertial.matrix['ixy']) + ',' +\
                             str(body.inertial.matrix['ixz']) + ',\n'
@@ -263,7 +309,7 @@ class GenerateMetapodFromURDF:
                             str(body.inertial.matrix['izz']) + ');\n'
         f.write(s)
         
-        s=  s_width + 'Spatial::Inertia ' + body.name + '::I = spatialInertiaMaker(' + body.name + '::mass,\n'
+        s=  s_width + 'b' + body.name + '.I = spatialInertiaMaker(' + body.name + '::mass,\n'
         s=s+s_width + '                 ' +             '                          ' + body.name + '::CoM,\n'
         s=s+s_width + '                 ' +             '                          ' + body.name + '::inertie);\n'
         f.write(s)
@@ -296,21 +342,105 @@ class GenerateMetapodFromURDF:
         s = '  Eigen::Matrix< FloatType, Robot::NBDOF, Robot::NBDOF > Robot::H;\n\n'      
         f.write(s)
 
-        # For each joint
-        i=0
-        for k,v in self.urdf.joints.iteritems():
-          i=self.generate_init_joint(f,v,i)
-
-        # For each body
-        i=0
-        for k,v in self.urdf.links.iteritems():
-          i=self.generate_init_body(f,v,i)
+        # Generate node.
+        s_width = '    ';
+        for link in self.urdf.links:
+            if link not in self.urdf.parent_map:
+              self.generate_init_node(f, link, s_width, False,1,0)
 
         # Close namespaces.
         self.close_robot_ns(f)
         self.close_metapod_ns(f);
 
         f.close()
+
+
+    def generate_init_node(self,f,body,s_switch, lbool, child_left,label):
+        child_size = 0
+        # Number of child for the current body
+        if body in self.urdf.child_map:
+            child_size = len(self.urdf.child_map[body])
+
+        # Get the joint and the father link of current body
+        if body in self.urdf.parent_map:
+            (joint_name,parent) = self.urdf.parent_map[body]
+            if parent in self.urdf.parent_map:
+                (joint_parent_name,grand_parent) = self.urdf.parent_map[parent]
+                joint_parent = self.urdf.joints[joint_parent_name]
+            else:
+                joint_parent = self.get_urdf_joint_root()
+
+        # If the body is to be written
+        if lbool:
+            # Write the node instance related to the parent.
+            # Write the reference to the joint.
+            s= s_switch + joint_name + 'T::Joint &j' + joint_name + ' = ' + joint_name + '.m_Joint;';
+            s+='\n'
+            f.write(s)
+
+            # Write the reference to the body.
+            s= s_switch + joint_name + 'T::Body &b' + body + ' = ' + joint_name + '.m_Body;';
+            s+='\n\n'
+            f.write(s)
+            self.generate_init_joint(f,self.urdf.joints[joint_name],label,'    ');
+            self.generate_init_body(f,self.urdf.links[body],label,'    ');
+            label=label+1
+            
+                       
+        # Deal with the child of the current link
+        if body in self.urdf.child_map:
+            # We will count the number of Node to be written or not
+            generateNodeFalseNb=0
+            generateNodeTrueNb=0
+
+            # Going through all the childs
+            child_size = len(self.urdf.child_map[body])
+            for idx, v in enumerate(self.urdf.child_map[body]):
+                child_left = child_size -idx-1
+                child_joint = self.urdf.joints[v[0]]
+
+                generateNode=False
+                # If the joint is not fixed then write the body
+                if child_joint.joint_type !='fixed':
+                    generateNode=True
+                else:
+                  # Otherwise DO NOT write it unless it is the root.
+                  if body not in self.urdf.parent_map:
+                      generateNode=True
+                
+                if generateNode:        
+
+                    # Add a node corresponding to the child
+                    generateNodeTrueNb+=1
+
+                    # Add a comma if this is not the root
+                    if body in self.urdf.parent_map:    
+                        s= s_switch + 'typedef ' + joint_name + 'T::Child' + str(idx)  \
+                            + ' ' + child_joint.name + 'T;\n'
+                        f.write(s)
+                        s= s_switch +'NodeInstance<' + child_joint.name + 'T> &' \
+                            + child_joint.name + ' = ' \
+                            + joint_name + '.m_Child' +  str(idx) +';'
+                    else: 
+                        joint_root = self.get_urdf_joint_root()
+                        s= s_switch + 'typedef ' + 'Robot::Tree ' +  joint_root.name + 'T;\n'
+                        f.write(s)
+                        s= s_switch +'NodeInstance<' + joint_root.name + 'T> &'+ joint_root.name \
+                            + ' = m_Tree;'
+                    s+='\n'
+                    f.write(s);
+                    pres_switch=s_switch;
+                    #s_switch= s_switch+'     '
+                    label=self.generate_init_node(f,v[1],s_switch, True,child_left,label)
+                else:
+                    # Do line break 
+                    if generateNodeFalseNb==0:
+                        s= '\n'     
+                        f.write(s)
+                    label=self.generate_init_node(f,v[1],s_switch, False,child_left,label)     
+                    generateNodeFalseNb+=1
+            
+        return label
 
     def generate_node(self,f,body,s_switch, lbool, child_left):
 
@@ -384,13 +514,13 @@ class GenerateMetapodFromURDF:
                     s_switch=pres_switch
                     f.write(s)
                 else:
-                    # Do n
+                    # Do break line
                     if generateNodeFalseNb==0:
                         s= '\n'     
                         f.write(s)
                     self.generate_node(f,v[1],s_switch, False,child_left)     
                     generateNodeFalseNb+=1
-        
+
     def generate_robot(self):
         lfilename = self.urdf.name + '_robot.hh'
         f = open(lfilename,'w')
