@@ -1,3 +1,5 @@
+import roslib; roslib.load_manifest('xml_reflection');
+
 from xml_reflection.basics import *
 import xml_reflection as xmlr
 

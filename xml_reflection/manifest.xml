@@ -1,15 +1,13 @@
 <package>
   <description brief="Modeling robot information (Python)">
 
-    robot_model_py contains a Python implementation of the urdf_parser
-     package modeling various aspects of robot information, specified
-     in the Xml Robot Description Format (URDF).
+    Reflection a la SDF from Gazebo.
 
   </description>
   <author>David!!, Thomas Moulard</author>
   <license>BSD</license>
   <review status="unreviewed" notes=""/>
-  <url>http://ros.org/wiki/urdf_parser_py</url>
+  <url>http://ros.org/wiki/xml_reflection</url>
 
   <export>
     <rosdoc config="rosdoc.yaml" />
@@ -17,5 +15,4 @@
   </export>
 
   <depend package="rospy"/>
-  <depend package="xml_reflection"/>
 </package>
